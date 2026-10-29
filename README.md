@@ -1,255 +1,347 @@
-# Credit Card Fraud Detection Using Machine Learning
+<div align="center">
 
-A comparative machine learning project using the BankSim dataset to detect fraudulent financial transactions, evaluate model performance under class imbalance, and estimate potential financial savings.
+# 🛡️ Credit Card Fraud Detection on BankSim
 
-## Project Overview
+### Which model wins — and how much money does it actually save?
 
-Credit card fraud detection is a highly imbalanced classification problem in which fraudulent transactions represent only a small proportion of all transactions. A useful detection system must identify suspicious activity while limiting false alarms and the operational cost of reviewing legitimate transactions.
+*Logistic Regression · SVM (RBF) · Decision Tree vs. two business-rule baselines, evaluated on a strictly time-ordered, never-peeked Test set.*
 
-This project investigates whether machine learning models can improve fraud detection over simple, rule-based baselines. It compares predictive performance, evaluates business impact, and uses a time-based validation strategy to reduce information leakage.
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-1.9-F7931E?logo=scikitlearn&logoColor=white)
+![pandas](https://img.shields.io/badge/pandas-2.3-150458?logo=pandas&logoColor=white)
+![Jupyter](https://img.shields.io/badge/Jupyter-Notebook-F37626?logo=jupyter&logoColor=white)
+![Best PR-AUC](https://img.shields.io/badge/Test%20PR--AUC-0.923-success)
+![Net saved](https://img.shields.io/badge/Net%20saved-%24589.8K-brightgreen)
 
-The analysis is conducted using the **BankSim synthetic banking transaction dataset**.
+</div>
 
-## Objectives
+---
 
-- Explore transaction patterns and identify characteristics associated with fraudulent activity.
-- Investigate class imbalance and differences across transaction categories, merchants, and customer demographics.
-- Engineer behavioral features using historical transaction information.
-- Compare Logistic Regression, RBF Support Vector Machine (SVM), and Decision Tree models.
-- Benchmark machine learning models against amount-based and category-based baselines.
-- Select classification thresholds using validation data.
-- Estimate net financial savings after accounting for transaction losses and review costs.
-- Assess uncertainty, feature dependence, and the limitations of the resulting models.
+## 📌 Table of Contents
 
-## Dataset
+1. [Overview](#-overview)
+2. [Headline Results](#-headline-results)
+3. [Dataset](#-dataset)
+4. [Methodology](#-methodology)
+5. [Key EDA Findings](#-key-eda-findings)
+6. [Feature Engineering](#-feature-engineering)
+7. [Models & Tuning](#-models--tuning)
+8. [Business Value Framework](#-business-value-framework)
+9. [Results in Detail](#-results-in-detail)
+10. [Limitations & Honest Caveats](#%EF%B8%8F-limitations--honest-caveats)
+11. [Getting Started](#-getting-started)
+12. [Repository Structure](#-repository-structure)
+13. [Possible Extensions](#-possible-extensions)
 
-The notebook uses the BankSim dataset, containing **594,643 transactions** across 180 time steps, representing approximately six months of simulated activity.
+---
 
-| Characteristic | Description |
+## 🔭 Overview
+
+Fraud is rare (~1% of transactions) but expensive (~18% of total transaction *value* in this data). Accuracy is therefore meaningless, and a model that is "better on AUC" is not necessarily better for the business.
+
+This project builds and compares three classic classifiers against two simple, realistic baselines, and judges them on what a bank cares about: **dollars saved after paying for the cost of reviewing alerts**.
+
+**What makes this notebook different from a typical Kaggle fraud walkthrough:**
+
+| | Typical approach | This project |
+|---|---|---|
+| **Split** | Random `train_test_split` | **Chronological** Train / Validation / Test — the model predicts the *future* from the *past* |
+| **Test set** | Peeked at repeatedly | **Locked in a "vault"** and opened **exactly once**, after everything is frozen |
+| **Metric** | Accuracy / ROC-AUC | **PR-AUC**, **F1** and **net dollars saved** |
+| **Baselines** | None | **Price-only** and **Category-risk** rules — ML must beat *these*, not nothing |
+| **Imbalance** | SMOTE | `class_weight` tested empirically; **no SMOTE** (it fabricates unrealistic transactions) |
+| **Leakage** | Assumed absent | **Automated leakage audit** (past-only features ≡ features with future visible) |
+| **Uncertainty** | Single number | **Block bootstrap** 95% CIs and *paired* differences |
+| **Assumptions** | Hidden | Cost assumptions exposed with a **sensitivity analysis** |
+
+---
+
+## 🏆 Headline Results
+
+Results on the **held-out Test set** (30 days · 111,306 transactions · 1,200 frauds). Without any model, the loss would be **$601,463**.
+
+| Model | PR-AUC | F1 | Alerts raised | **Net saved** | Loss avoided |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Logistic Regression | 0.913 | 0.836 | 2,187 | $588,836 | 97.9% |
+| 🥇 **SVM (RBF)** | **0.923** | **0.839** | **1,831** | **$589,769** | **98.1%** |
+| Decision Tree | 0.868 | 0.807 | 2,275 | $584,697 | 97.2% |
+| Baseline: Price only | 0.704 | 0.669 | 3,520 | $573,694 | 95.4% |
+| Baseline: Category risk | 0.464 | 0.531 | 8,533 | $549,856 | 91.4% |
+
+> *Alert cost assumed at **$5 per flagged transaction**; blocking effectiveness assumed 100% (an upper bound). See [Business Value Framework](#-business-value-framework).*
+
+### 💡 Takeaways
+
+- **ML beats the strongest baseline by ≈ $16,059** (95% CI: $13,859 → $18,031) on the same 30 days, with the model ahead in 100% of bootstrap resamples. A simple "flag expensive transactions" rule already keeps ~95% of the money — **the real value of ML is the incremental ~3%**, and the notebook says so plainly.
+- **SVM (RBF) was selected** by Validation PR-AUC and also tops the Test table, but its margin over Logistic Regression (~$900) is **well inside the bootstrap confidence interval** — statistically a tie. In production, the simpler, faster, more explainable Logistic Regression is a very defensible choice.
+- **The category baseline looks cheap but is noisy:** it raises ~8.5K alerts (vs. ~1.8K for SVM), wasting review budget on legitimate transactions.
+
+---
+
+## 🗃️ Dataset
+
+**BankSim** — a synthetic payment dataset generated by an agent-based simulator calibrated on real transaction aggregates.
+
+| Property | Value |
 |---|---|
-| Dataset | BankSim |
-| Total transactions | 594,643 |
-| Fraudulent transactions | 7,200 |
-| Fraud prevalence | Approximately 1.21% |
-| Target variable | `fraud` |
-| Primary transaction features | Amount, category, merchant, customer attributes |
-| Temporal information | `step`, used to preserve chronological ordering |
+| Source file | `bs140513_032310.csv` ([Kaggle: *Banksim1*](https://www.kaggle.com/datasets/ealaxi/banksim1)) |
+| Transactions | **594,643** |
+| Time span | 180 `step`s (≈ 6 months, 1 step = 1 day) |
+| Frauds | **7,200 (1.21%)** |
+| Customers | ~4,100 |
+| Merchants | 50 |
+| Key columns | `customer`, `age`, `gender`, `merchant`, `category`, `amount`, `fraud` |
 
-The dataset is synthetic. Its fraud patterns and predictive relationships may differ significantly from those found in real banking systems.
+> 📥 **The CSV is not bundled.** Download it from Kaggle and place it next to the notebook.
 
-The notebook expects the dataset file `bs140513_032310.csv` to be available in the working directory.
+### Chronological split
 
-## Technologies and Libraries
+| Split | Steps | Rows | Frauds | Fraud rate |
+|---|:---:|---:|---:|---:|
+| **Train** | 0 – 119 | 374,914 | 4,800 | 1.280% |
+| **Validation** | 120 – 149 | 108,423 | 1,200 | 1.107% |
+| **Test** 🔒 | 150 – 179 | 111,306 | 1,200 | locked until Section 7 |
 
-- **Python** — primary programming language
-- **Pandas and NumPy** — data manipulation and numerical computation
-- **Matplotlib and Seaborn** — exploratory data analysis and visualization
-- **SciPy** — statistical testing
-- **Scikit-learn** — preprocessing, model training, hyperparameter evaluation, and performance metrics
-- **Jupyter Notebook** — interactive analysis and experimentation
+Customers appear in all three splits (as in a real bank where existing customers keep transacting) — but time is never reversed.
 
-## Machine Learning Models
+---
 
-The project compares three supervised learning algorithms against two simple baselines.
+## 🧪 Methodology
 
-| Model | Purpose |
+```
+ Clean ─▶ Time split ─▶ EDA (Train only) ─▶ Features (past-only) + leakage audit
+                                                      │
+        ┌─────────────────────────────────────────────┘
+        ▼
+ Experiment 1: do behavioural features help? ─▶ Tune on Validation ─▶ Pick threshold on Validation
+        │
+        ▼
+ Critical analysis (errors · interpretability · ablation)   ◀── Test still locked
+        │
+        ▼
+ 🔒 FREEZE everything  ─▶  🧪 Open Test once  ─▶  Bootstrap CIs · Sensitivity · Hard subset
+```
+
+**Cleaning decisions** (all label-independent, so safe before splitting):
+
+- Strip the stray single quotes wrapping every string value
+- Drop `zipcodeOri` / `zipMerchant` (asserted to be constant)
+- Drop `step` *after* using it to define the split boundaries — row order (asserted chronological) preserves time; `step` never becomes a feature
+- Map `age = 'U'` → group `7` (it is perfectly equivalent to gender `E` / Enterprise)
+- Remove the `es_` prefix from categories
+
+**Threshold policy:** thresholds are chosen on **Validation** (F1-optimal for F1; cost-minimising for dollars), then frozen. This matters because the fraud rate drifts slightly downward over time (1.28% → 1.11%), so a default 0.5 cut-off would be wrong.
+
+---
+
+## 🔍 Key EDA Findings
+
+*(All computed on Train only; Validation used solely for a drift check.)*
+
+- **Extreme imbalance:** 1 fraud per 78 transactions. "Always predict legit" scores 98.7% accuracy — hence accuracy is discarded.
+- **Frauds are big:** 1.28% of transactions but **18% of total value**. Mean fraud amount $537 vs. $32 for legitimate transactions.
+- **`amount` alone is a strong signal:** ROC-AUC = **0.951**, and it stays high *within* individual categories (e.g. 0.99 in leisure) — so it is not merely a "travel is expensive" confound.
+- **Fraud concentrates in a handful of categories;** the rest are essentially clean. A category rule is therefore a strong baseline.
+- **Merchants:** 30 of 50 have ≥1 fraud; the top 5 hold 60% of cases.
+- **Repeat victims:** 28.4% of customers have at least one fraud; median 2 per victim, max 106 — stolen cards are reused, motivating customer-history features.
+- **Demographics:** differences exist but are checked via Cramér's V and category-mix confounding rather than p-values alone (with 375K rows everything is "significant"). Because fairness risk is real, an **ablation** tests whether age/gender are needed at all.
+- **Drift check:** fraud rate 1.28% → 1.11%, category mix shift 2.15%, median amount stable ($26.87 → $26.95).
+
+---
+
+## 🧱 Feature Engineering
+
+Every behavioural feature uses **only information available at decision time**.
+
+| Feature | Meaning |
 |---|---|
-| Logistic Regression | Establish a linear classification benchmark |
-| Support Vector Machine (RBF kernel) | Capture nonlinear relationships |
-| Decision Tree | Model nonlinear patterns and feature interactions |
-| Price baseline | Rank transactions using transaction amount |
-| Category baseline | Rank transactions using fraud rates estimated from training data |
+| `log_amount` | `log(1 + amount)` |
+| `amt_z_in_category` | How unusual the amount is for its category (stats fit on Train) |
+| `log_n_prior_txn`, `is_first_txn` | How much history the customer has |
+| `log_amt_to_cust_mean`, `log_amt_to_cust_max` | Amount relative to the customer's *past* mean / max |
+| `is_new_merchant`, `is_new_category` | First time this customer buys here (given existing history) |
+| `category`, `merchant`, `gender`, `age` | One-hot encoded (encoder fit on Train; `age` treated as categorical) |
 
-The SVM is trained on a subset of the training data because of its computational cost. The subset includes fraudulent transactions from the training set and 40,000 randomly sampled legitimate transactions under the standard configuration.
+**Deliberately excluded**
 
-## Methodology
+- ❌ `customer` ID — one-hot IDs just memorise people
+- ❌ "Customer was previously defrauded" flag — extremely predictive but **unavailable in reality** (chargeback labels arrive days late), i.e. hidden leakage
+- ❌ Target encoding of merchants — leaks the label through the encoding
 
-### 1. Data Cleaning and Preparation
+**🔍 Leakage audit:** the pipeline asserts that features computed with *only the past* are identical to features computed with the *full timeline* at three cut-points. Classic bugs (global `mean()`, wrong-direction `shift`) would fail it.
 
-The notebook performs data quality checks and prepares the dataset for analysis.
+---
 
-Key steps include:
+## 🤖 Models & Tuning
 
-- Removing unnecessary quotation marks from categorical values.
-- Checking chronological ordering and identifying constant location-related columns.
-- Removing columns that provide no useful variation.
-- Standardizing category labels.
-- Handling unknown age values.
-- Preserving transaction order for subsequent time-based splitting.
+Shared preprocessing: `StandardScaler` (numeric) + `OneHotEncoder` (categoricals), both **fit on Train**. Final design matrix: **85 features**.
 
-### 2. Time-Based Train, Validation, and Test Split
+| Model | Grid | Best config | Val PR-AUC |
+|---|---|---|:---:|
+| Logistic Regression | 6 configs | `C=10`, no class weighting | 0.9073 |
+| **SVM (RBF)** | 4 configs | `C=10`, `gamma=0.02` | **0.9235** |
+| Decision Tree | 16 configs | `max_depth=12`, `min_samples_leaf=100`, no class weighting | 0.8711 |
 
-Instead of randomly splitting transactions, the notebook preserves their chronological order.
+**Design choices worth noting**
 
-- **Training set:** used for exploratory analysis, feature preparation, and model fitting.
-- **Validation set:** used for model comparison, hyperparameter selection, and decision-threshold optimization.
-- **Test set:** reserved for final performance evaluation after the model configuration and thresholds have been frozen.
+- **SVM trained on an under-sampled Train subset** (all 4,800 frauds + 40,000 random legitimate rows = 44,800 rows, 10.7% fraud) because RBF-SVM scales ~O(n²). It then scores the full Val/Test via `decision_function`, with the threshold re-calibrated on Val.
+- **`class_weight='balanced'` did *not* help** — it lowered PR-AUC for both Logistic Regression (0.890 vs 0.907) and the tree.
+- **Time-aware validation instead of k-fold** — random folds would leak the future.
+- **Small, deliberate grids** — gaps of a few thousandths between configs are noise, and the notebook treats them that way.
 
-This approach better reflects the intended use case of predicting future transactions from historical data.
+### Baselines
 
-### 3. Exploratory Data Analysis
+1. **Price** — score = `amount`
+2. **Category** — score = historical fraud rate of the transaction's category (from Train)
 
-Exploratory analysis focuses on the training data and investigates:
+---
 
-- Fraud prevalence and class imbalance.
-- Fraud rates across transaction categories.
-- Transaction amount distributions.
-- Customer age and gender patterns.
-- Merchant-level fraud behavior.
-- Repeated transactions and customers affected by fraud.
-- Changes in transaction distributions between training and validation periods.
+## 💰 Business Value Framework
 
-The findings inform feature engineering and model design.
+```
+cost    = Σ (amount of frauds missed)  +  c_review × (# alerts raised)
+savings = (loss with no model)  −  cost
+```
 
-### 4. Feature Engineering
+| Assumption | Default | Notes |
+|---|---|---|
+| `REVIEW_COST` | **$5 / alert** | OTP, step-up authentication or manual review |
+| `EFFECTIVENESS` | **1.0** | Share of alerted fraud actually stopped — an *upper bound* |
 
-The notebook constructs transaction-level features designed to capture both transaction characteristics and customer behavior.
+Economic intuition: flagging one more transaction pays off only when `P(fraud) × amount > review cost`. Because both assumptions are guesses, **Section 8.3 re-runs the conclusions across a grid of costs and effectiveness values** (with the threshold held at its frozen Validation value), including SVM's advantage over the best baseline.
 
-Examples include:
+---
 
-| Feature | Description |
-|---|---|
-| `log_amount` | Log-transformed transaction amount |
-| `amt_z_in_category` | Relative amount anomaly within a transaction category |
-| `log_n_prior_txn` | Log-transformed number of previous customer transactions |
-| `is_first_txn` | Indicates whether the transaction is the customer's first observed transaction |
-| `log_amt_to_cust_mean` | Transaction amount relative to the customer's historical average |
-| `log_amt_to_cust_max` | Transaction amount relative to the customer's historical maximum |
-| `is_new_merchant` | Indicates a first observed transaction by the customer at a merchant |
-| `is_new_category` | Indicates a first observed transaction by the customer in a category |
+## 📊 Results in Detail
 
-Historical behavioral features are calculated using prior transactions rather than future observations. Customer identifiers, the time-step column, and direct indicators of previously observed fraud are excluded from the model features.
+### Statistical rigour
+- **Block bootstrap** (500 resamples; Test split into 30 consecutive blocks ≈ days) because same-day transactions are correlated (shared fraud campaigns).
+- 95% CIs and **paired differences** between models — so "A beats B" is tested, not eyeballed.
 
-### 5. Preprocessing and Model Training
+| Model | PR-AUC [95% CI] | F1 [95% CI] | Net saved [95% CI] |
+|---|---|---|---|
+| Logistic Regression | 0.913 [0.900, 0.925] | 0.836 [0.818, 0.854] | $588,836 [$529K, $652K] |
+| SVM (RBF) | 0.923 [0.911, 0.935] | 0.839 [0.820, 0.857] | $589,769 [$530K, $653K] |
+| Decision Tree | 0.868 [0.852, 0.884] | 0.807 [0.786, 0.827] | $584,697 [$525K, $648K] |
+| Baseline: price | 0.704 [0.673, 0.736] | 0.669 [0.643, 0.697] | $573,694 [$514K, $638K] |
+| Baseline: category | 0.464 [0.425, 0.500] | 0.531 [0.494, 0.568] | $549,856 [$489K, $615K] |
 
-The modeling pipeline uses:
+### Critical analysis of the selected model (Validation)
+- **Error audit:** SVM missed 49 of 1,200 frauds (**$3,781** total) and falsely alerted on 677 legitimate transactions. Missed frauds are *small* (median $65 vs. $336 for caught ones) and concentrate in `wellnessandbeauty` and `hyper`.
+- **Interpretability:** SVM-RBF is a black box (1,748 support vectors); the notebook examines the interpretable models for explanation.
+- **Ablation:** re-scores PR-AUC after dropping feature groups (merchant, age/gender, behavioural, …) to expose over-reliance on merchant identity and to test whether demographic features can be removed for simplicity and fairness.
 
-- `StandardScaler` for numerical features.
-- `OneHotEncoder` for categorical variables.
-- Training-only fitting of preprocessing transformations.
-- A small hyperparameter search using the validation set.
-- Experiments comparing static features with additional behavioral features.
-- Evaluation of class weighting as a way to address class imbalance.
+### Hard subset
+Restricting to the 12 categories that contain fraud (9.4% of Test rows, 11.5% fraud rate) removes the "easy negatives". ROC-AUC saturates near 0.99 for every model while PR-AUC still separates them — the reason ROC-AUC is not the headline metric.
 
-The SVM uses a reduced training sample to manage computational requirements.
+---
 
-### 6. Evaluation Metrics
+## ⚠️ Limitations & Honest Caveats
 
-Because fraudulent transactions account for approximately 1.21% of the dataset, accuracy alone would be misleading.
+1. **Simulated data is optimistic.** Categories and merchants separate fraud almost too cleanly; real fraud is ~0.1%, adaptive, and labels arrive late. Fraud-per-day is near-constant in the simulator, so **robustness to concept drift is not tested**.
+2. **Costs are assumptions** ($5/alert, 100% blocking). Replace with real chargeback, review and customer-friction figures before drawing financial conclusions.
+3. **SVM saw only ~45K rows**, so the comparison with the other two models isn't perfectly like-for-like (compensated by threshold recalibration on Val).
+4. **One 30-day Test window** → wide confidence intervals; production would need continuous monitoring (PSI, alert-rate and precision tracking).
+5. **Merchant dependence:** a model that memorises merchant IDs can't score new merchants and is easy for fraudsters to evade — see the ablation.
+6. **Fairness:** gender/age differences exist in the data, but the model should not turn them into "who is riskier" rules; the ablation quantifies whether they are needed.
 
-The notebook emphasizes the following metrics:
+---
 
-- **PR-AUC (Average Precision):** measures ranking performance with a focus on the minority fraud class.
-- **Precision:** measures the proportion of flagged transactions that are fraudulent.
-- **Recall:** measures the proportion of fraudulent transactions detected.
-- **F1-score:** balances precision and recall at a selected threshold.
-- **ROC-AUC:** provides a supplementary measure of ranking performance.
-- **Number of alerts:** estimates the operational workload created by the detection system.
-- **Net financial savings:** estimates the financial benefit after accounting for prevented fraud losses and review costs.
-
-F1-optimized thresholds and cost-optimized thresholds are selected using validation data. The chosen thresholds are then frozen before the final test evaluation.
-
-### 7. Financial Impact Analysis
-
-The notebook estimates the potential financial benefit of flagging fraudulent transactions.
-
-The calculation accounts for the value of detected fraud, the assumed effectiveness of preventing those losses, and the cost of reviewing alerts.
-
-**Estimated net savings:**
-
-Net savings = Prevented fraud losses − Alert review costs
-
-The standard analysis assumes a review cost of $5 per alert and a specified fraud-prevention effectiveness. Sensitivity analysis varies both assumptions to examine how business conclusions change under different operating conditions.
-
-These estimates are scenario-based, not measured savings from a real financial institution.
-
-### 8. Model Interpretation and Robustness
-
-Additional analyses examine:
-
-- False positives and missed fraudulent transactions.
-- The contribution of different feature groups.
-- Model dependence on merchant identifiers and demographic features.
-- Performance within higher-risk transaction categories.
-- Bootstrap confidence intervals using contiguous blocks of test transactions.
-- Sensitivity of estimated financial savings to review costs and fraud-prevention effectiveness.
-
-The test set is used for final reporting rather than iterative model selection.
-
-## Results
-
-The notebook produces a comparative evaluation of all three machine learning models and both baselines.
-
-The principal results include:
-
-- PR-AUC and F1-score on the held-out test set.
-- Precision, recall, and the number of alerts at selected thresholds.
-- Estimated net financial savings and the percentage of baseline fraud losses avoided.
-- Bootstrap confidence intervals for key metrics.
-- Sensitivity analysis under alternative cost and prevention assumptions.
-- Performance on higher-risk transaction categories.
-
-**Final model performance should be reported using the actual outputs generated by running the notebook.** No numerical test results or winning model are asserted here because they should be taken directly from the notebook's executed results.
-
-## How to Run the Project
+## 🚀 Getting Started
 
 ### Prerequisites
+- Python 3.10+
+- ~4 GB RAM (SVM tuning is the heaviest step, ≈ 2.5 min)
 
-Install Python and Jupyter Notebook or JupyterLab.
-
-Install the required packages:
-
-```bash
-pip install numpy pandas matplotlib seaborn scipy scikit-learn jupyter
-```
-
-### Setup
-
-1. Download or clone the project repository.
-2. Place `bs140513_032310.csv` in the working directory alongside the notebook.
-3. Start Jupyter Notebook:
+### Installation
 
 ```bash
-jupyter notebook
+git clone https://github.com/<your-username>/<your-repo>.git
+cd <your-repo>
+
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+pip install numpy pandas scipy scikit-learn matplotlib seaborn jupyter
 ```
 
-4. Open `Fraud_Detection(4).ipynb`.
-5. Run the notebook cells sequentially from beginning to end.
+### Data
 
-The notebook uses a fixed random seed for reproducibility. Runtime depends on the machine, dataset, and selected model configurations.
+Download `bs140513_032310.csv` from [Kaggle — BankSim](https://www.kaggle.com/datasets/ealaxi/banksim1) and place it in the project root.
 
-## Limitations
+### Run
 
-Several limitations should be considered when interpreting the findings:
+```bash
+jupyter notebook Fraud_Detection.ipynb
+```
 
-1. **Synthetic data:** BankSim may contain simpler fraud patterns than real-world transaction data.
-2. **Class imbalance:** The observed fraud prevalence may not represent the prevalence encountered in production.
-3. **SVM sampling:** The SVM uses fewer legitimate transactions during training, so its training setup differs from those of the other models.
-4. **Assumed financial costs:** Review cost and prevention effectiveness are modeled assumptions that require real operational data for practical deployment.
-5. **Limited test period:** A single held-out time window cannot establish long-term stability.
-6. **Merchant dependence:** Merchant identifiers may be predictive in the simulated dataset but may generalize poorly when fraud patterns or merchants change.
-7. **Temporal features:** Removing the time-step column limits the use of explicit time-based behavioral signals.
-8. **Deployment requirements:** A production system would require monitoring, threshold recalibration, data-quality controls, and periodic retraining.
+**Fast smoke test** (fewer bootstrap resamples, 50 instead of 500):
 
-The results should therefore be interpreted as an experimental evaluation, not as evidence of production-ready fraud prevention.
+```bash
+QUICK_RUN=1 jupyter notebook Fraud_Detection.ipynb
+```
 
-## Future Improvements
+### Tuning the experiment
 
-Potential next steps include:
+All key knobs are in the **Configuration** cell:
 
-- Evaluating gradient-boosting models such as XGBoost or LightGBM.
-- Testing on additional time periods and datasets with realistic fraud prevalence.
-- Developing richer rolling-window behavioral features.
-- Calibrating model scores into reliable fraud probabilities.
-- Optimizing thresholds according to review-team capacity and real operational costs.
-- Monitoring data drift, fraud prevalence, alert volume, and model performance.
-- Evaluating fairness and the necessity of demographic features.
-- Reassessing performance when merchants, fraud strategies, and transaction behavior change.
+| Variable | Default | Purpose |
+|---|---|---|
+| `SEED` | `42` | Reproducibility |
+| `TRAIN_END`, `VAL_END` | `119`, `149` | Chronological split boundaries |
+| `REVIEW_COST` | `5.0` | $ per alert |
+| `EFFECTIVENESS` | `1.0` | Fraction of alerted fraud stopped |
+| `N_BOOT` | `500` | Bootstrap resamples (`50` if `QUICK_RUN`) |
 
-## Conclusion
+---
 
-This project provides an end-to-end workflow for fraud detection, from exploratory data analysis and leakage-aware feature engineering to model comparison, threshold selection, and business-oriented evaluation.
+## 📁 Repository Structure
 
-By comparing machine learning models with simple baselines and evaluating both predictive quality and estimated financial impact, the notebook demonstrates a more practical approach to fraud detection than relying on accuracy alone.
+```
+.
+├── Fraud_Detection.ipynb        # Full analysis: EDA → modelling → evaluation
+├── bs140513_032310.csv          # BankSim data (download separately)
+└── README.md
+```
 
-The central objective is to identify a model that detects fraudulent transactions effectively while maintaining a manageable alert volume and delivering positive estimated net savings under clearly stated assumptions.
+> 🌐 **Note:** the notebook's narrative and commentary are written in **Vietnamese**; code, metrics and tables are language-neutral.
+
+### Notebook map
+
+| § | Section |
+|:-:|---|
+| 1 | Configuration |
+| 2 | Load → clean → chronological split (Test locked) |
+| 3 | EDA on Train (imbalance, category, amount, demographics, merchants, customers, drift) |
+| 4 | Feature engineering + leakage audit |
+| 5 | Evaluation framework, Experiment 1 (behavioural features), tuning, baselines & thresholds |
+| 6 | Critical analysis: errors, interpretability, ablation |
+| 7 | 🔒 Freeze → 🧪 open Test once |
+| 8 | Test results, bootstrap, cost sensitivity, hard subset |
+| 9 | Conclusions & limitations |
+
+---
+
+## 🔮 Possible Extensions
+
+- **Gradient boosting** (LightGBM / XGBoost) and a calibrated probability output
+- **Cost-sensitive learning** with per-transaction costs (`amount`-weighted loss)
+- **Rolling-origin backtesting** over multiple Test windows to measure drift
+- **Real-world features:** velocity (transactions per hour), geolocation, device fingerprint
+- **SHAP explanations** for the tree/linear models and reason codes for analysts
+- **Streaming/online scoring** and alert-budget-aware thresholding
+
+---
+
+## 📚 References
+
+- López-Rojas, E. A., & Axelsson, S. (2014). *BankSim: A Bank Payments Simulator for Fraud Detection Research.* 26th European Modeling and Simulation Symposium.
+- Saito, T., & Rehmsmeier, M. (2015). *The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets.* PLOS ONE.
+
+---
+
+<div align="center">
+
+⭐ If you found this project useful, consider giving it a star!
+
+</div>
